@@ -33,8 +33,9 @@ class MesosTaskTest(MesosTask):
 
 class RootTaskTest(luigi.WrapperTask):
 
+    n = luigi.IntParameter(default=1)
     def requires(self):
-        yield [MesosTaskTest(id = i, sleep=i + 10) for i in range(10)]
+        yield [MesosTaskTest(id = i, sleep=5) for i in range(self.n)]
 
     def run(self):
         print("root task is running")

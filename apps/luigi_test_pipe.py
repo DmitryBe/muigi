@@ -21,7 +21,7 @@ class MesosTaskTest(MesosTask):
             f.write('ok')
 
     def output(self):
-        return luigi.LocalTarget('tmp/%s/_SUCCESS' % self.id)
+        return luigi.LocalTarget(is_tmp=True)
 
 
 class RootTaskTest(luigi.WrapperTask):

@@ -46,10 +46,10 @@ class SimpleScheduler(mesos.interface.Scheduler):
         task.container.docker.force_pull_image = True
 
         _tmp = []
-        for env_var in env_vars:
+        for key, val in env_vars.items():
             p1 = mesos_pb2.Parameter()
             p1.key = "env"
-            p1.value = env_var
+            p1.value = "{}={}".format(key,val)
             _tmp.append(p1)
         task.container.docker.parameters.extend(_tmp)
 

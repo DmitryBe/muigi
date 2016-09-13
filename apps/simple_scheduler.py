@@ -10,11 +10,11 @@ def log(msg, severity='INFO'):
 class SimpleScheduler(mesos.interface.Scheduler):
 
     def __init__(self, docker_image, cmd, resources_cpus, resources_mem, env_vars):
-        self.docker_image = docker_image
-        self.cmd = cmd
-        self.resources_cpus = resources_cpus
-        self.resources_mem = resources_mem
-        self.env_vars = env_vars
+        self.docker_image = str(docker_image)
+        self.cmd = str(cmd)
+        self.resources_cpus = float(resources_cpus)
+        self.resources_mem = float(resources_mem)
+        self.env_vars = dict(env_vars)
 
         self.total_tasks = 1
         self.tasksLaunched = 0
@@ -49,7 +49,7 @@ class SimpleScheduler(mesos.interface.Scheduler):
         for key, val in env_vars.items():
             p1 = mesos_pb2.Parameter()
             p1.key = "env"
-            p1.value = "{}={}".format(key,val)
+            p1.value = "{}={}".format(key, val)
             _tmp.append(p1)
         task.container.docker.parameters.extend(_tmp)
 

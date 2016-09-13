@@ -1,11 +1,4 @@
 import luigi
-from time import sleep
-import os
-import sys
-import time
-import mesos.interface
-from mesos.interface import mesos_pb2
-import mesos.native
 from apps.luigi_mesos_task import MesosTask
 
 class MesosTaskTest(MesosTask):
@@ -21,7 +14,7 @@ class MesosTaskTest(MesosTask):
         return "sh start.sh"
 
     def env_vars(self):
-        return ['SAY_PARAM=hello', 'SLEEP_PARAM=%s' % self.sleep]
+        return ['SAY_PARAM=hello', 'SLEEP_PARAM={}'.format(self.sleep)]
 
     def on_complete(self):
         with self.output().open('w') as f:

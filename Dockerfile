@@ -1,12 +1,10 @@
 FROM mesosphere/mesos:0.28.2-2.0.27.ubuntu1404
 
-ENV APP_DIR /app
-RUN mkdir -p ${APP_DIR}
-WORKDIR ${APP_DIR}
+RUN apt-get update && apt-get install -y python-pip && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-COPY apps/ ${APP_DIR}/apps
-COPY client.cfg ${APP_DIR}/
-COPY Makefile ${APP_DIR}/
-COPY tox.ini ${APP_DIR}/
-COPY requirements.txt ${APP_DIR}/
+WORKDIR /opt/app/
 
+ENV PYTHONPATH /usr/lib/python2.7/site-packages/
+COPY . ./
+
+RUN pip install -r requirements.txt

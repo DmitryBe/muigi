@@ -1,53 +1,30 @@
+import logging
+
 import luigi
-from time import sleep
-import os
-import sys
-import time
+
+import mesos.native
 import mesos.interface
 from mesos.interface import mesos_pb2
-import mesos.native
+
 from apps.simple_scheduler import SimpleScheduler
 
-
-class MesosTaskConfig(luigi.Config):
-    mesos_url = luigi.Parameter(default='localhost:5050')
-    docker_image = luigi.Parameter(default='')
-    resources_cpus = luigi.Parameter(default='0.5')
-    resources_mem = luigi.Parameter(default='128')
-
-
-def log(msg, severity='INFO'):
-    print('%s: %s' % (severity, msg))
-
+logger = logging.getLogger('luigi-interface')
 
 class MesosTask(luigi.Task):
 
-    config = MesosTaskConfig()
-    mesos_url = config.mesos_url
-    docker_image = config.docker_image
-    resources_cpus = float(config.resources_cpus)
-    resources_mem = float(config.resources_mem)
-
-    # override
-    def command(self):
-        raise Exception("command not implemented")
-
-    # override
-    def env_vars(self):
-        return []
-
-    # override
-    def on_complete(self):
-        pass
+    mesos_url = luigi.Parameter()
+    docker_image = luigi.Parameter()
+    docker_command = luigi.Parameter()
+    resources_cpus = luigi.FloatParameter()
+    resources_mem = luigi.FloatParameter()
+    env_vars = luigi.DictParameter()
 
     def run(self):
-        log('mesos url: %s' % self.mesos_url)
-        log("required resources (cpus/mem): %s/%s" % (self.resources_cpus, self.resources_mem))
-        log("docker image: %s" % (self.docker_image))
-        cmd = self.command()
-        env_vars = self.env_vars()
-        log('cmd: %s' % cmd)
-        log('env vars: %s' % env_vars)
+        logger.info("mesos url: {}".format(self.mesos_url))
+        logger.info("required resources (cpus/mem): {}/{}".format(self.resources_cpus, self.resources_mem))
+        logger.info("docker image: {}".format(self.docker_image))
+        logger.info("cmd: {}".format(self.docker_command))
+        logger.info("env vars: {}".format(dict(self.env_vars)))
 
         framework = mesos_pb2.FrameworkInfo()
         framework.user = "" # Have Mesos fill in the current user.
@@ -55,17 +32,17 @@ class MesosTask(luigi.Task):
         framework.checkpoint = True
         framework.principal = "luigi-task"
 
-        implicitAcknowledgements = 1
+        implicit_acknowledgements = 1
 
-        log("starting mesos driver")
+        logger.info("starting mesos driver")
         driver = mesos.native.MesosSchedulerDriver(
-                SimpleScheduler(self.docker_image, cmd, self.resources_cpus, self.resources_mem, env_vars),
+                SimpleScheduler(self.docker_image, self.docker_command, self.resources_cpus, self.resources_mem, self.env_vars),
                 framework,
                 self.mesos_url,
-                implicitAcknowledgements)
+                implicit_acknowledgements)
 
         status = 0 if driver.run() == mesos_pb2.DRIVER_STOPPED else 1
-        log("driver stoped with status: %s" % status)
+        logger.info("driver stoped with status: {}".format(status))
 
         # Ensure that the driver process terminates.
         driver.stop()

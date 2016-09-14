@@ -1,10 +1,11 @@
+import logging
+
 import mesos.interface
 from mesos.interface import mesos_pb2
 import mesos.native
 
 
-def log(msg, severity='INFO'):
-    print('{}: {}'.format(severity, msg))
+logger = logging.getLogger('luigi-interface')
 
 
 class SimpleScheduler(mesos.interface.Scheduler):
@@ -24,7 +25,7 @@ class SimpleScheduler(mesos.interface.Scheduler):
         self.retry_times = 0
 
     def registered(self, driver, frameworkId, masterInfo):
-        log("Registered with framework ID {}".format(frameworkId.value))
+        logger.debug("Registered with framework ID {}".format(frameworkId.value))
 
     def _create_mesos_task(self, slave_id, tid, docker_image, cmd, task_cpus, task_mem, env_vars):
         task = mesos_pb2.TaskInfo()
@@ -76,7 +77,7 @@ class SimpleScheduler(mesos.interface.Scheduler):
                 elif resource.name == "mem":
                     offerMem += resource.scalar.value
 
-            log("Received offer {} with cpus: {} and mem: {}".format(offer.id.value, offerCpus, offerMem))
+            logger.debug("Received offer {} with cpus: {} and mem: {}".format(offer.id.value, offerCpus, offerMem))
 
             remainingCpus = offerCpus
             remainingMem = offerMem
@@ -88,7 +89,7 @@ class SimpleScheduler(mesos.interface.Scheduler):
                 tid = self.tasksLaunched
                 self.tasksLaunched += 1
 
-                log("Launching task {} using offer {}".format(tid, offer.id.value))
+                logger.debug("Launching task {} using offer {}".format(tid, offer.id.value))
                 task = self._create_mesos_task(offer.slave_id.value, tid, self.docker_image, self.cmd, self.resources_cpus, self.resources_mem, self.env_vars)
 
                 tasks.append(task)
@@ -104,7 +105,7 @@ class SimpleScheduler(mesos.interface.Scheduler):
             driver.acceptOffers([offer.id], [operation])
 
     def statusUpdate(self, driver, update):
-        log("Task {} is in state {}".format(update.task_id.value, mesos_pb2.TaskState.Name(update.state)))
+        logger.debug("Task {} is in state {}".format(update.task_id.value, mesos_pb2.TaskState.Name(update.state)))
 
         slave_id = self.taskData[update.task_id.value]
 
@@ -113,11 +114,11 @@ class SimpleScheduler(mesos.interface.Scheduler):
 
         if update.state == mesos_pb2.TASK_ERROR:
             self.tasksFinished += 1
-            log("Error message: {}".format(update.message))
+            logger.error("Error message: {}".format(update.message))
 
         # stop driver if all tasks finished
         if self.tasksFinished == self.total_tasks:
-            log("All tasks finished, stopping driver...")
+            logger.debug("All tasks finished, stopping driver...")
             driver.abort()
 
         if update.state == mesos_pb2.TASK_LOST or \
@@ -127,9 +128,9 @@ class SimpleScheduler(mesos.interface.Scheduler):
             if self.retry_times <= self.max_retry_times:
                 self.tasksLaunched -= 1
                 self.retry_times += 1
-                log("[retry {}] Task {} is in unexpected state {} with message '{}'".format(self.retry_times, update.task_id.value, mesos_pb2.TaskState.Name(update.state), update.message))
+                logger.warning("[retry {}] Task {} is in unexpected state {} with message '{}'".format(self.retry_times, update.task_id.value, mesos_pb2.TaskState.Name(update.state), update.message))
             else:
-                log("Aborting because task {} is in unexpected state {} with message '{}'".format(update.task_id.value, mesos_pb2.TaskState.Name(update.state), update.message))
+                logger.error("Aborting because task {} is in unexpected state {} with message '{}'".format(update.task_id.value, mesos_pb2.TaskState.Name(update.state), update.message))
                 driver.abort()
 
 

@@ -5,19 +5,25 @@ import luigi
 import mesos.native
 import mesos.interface
 from mesos.interface import mesos_pb2
-
-from apps.simple_scheduler import SimpleScheduler
+from apps.multitasking_scheduler import MultitaskingScheduler
 
 logger = logging.getLogger('luigi-interface')
 
-class MesosTask(luigi.Task):
+
+class MesosTask(luigi.WrapperTask):
 
     mesos_url = luigi.Parameter()
     docker_image = luigi.Parameter()
     docker_command = luigi.Parameter()
     resources_cpus = luigi.FloatParameter()
     resources_mem = luigi.FloatParameter()
-    env_vars = luigi.DictParameter()
+    task_max_retry = luigi.IntParameter()
+
+    def get_tasks(self):
+        raise Exception("not implemented")
+
+    def on_complete(self, result):
+        pass
 
     def run(self):
         logger.info("mesos url: {}".format(self.mesos_url))
@@ -34,9 +40,16 @@ class MesosTask(luigi.Task):
 
         implicit_acknowledgements = 1
 
+        scheduler = MultitaskingScheduler(
+            self.docker_image, self.docker_command,
+            self.resources_cpus, self.resources_mem,
+            self.get_tasks(),
+            lambda result: self.on_complete(result),
+            self.task_max_retry)
+
         logger.info("starting mesos driver")
         driver = mesos.native.MesosSchedulerDriver(
-                SimpleScheduler(self.docker_image, self.docker_command, self.resources_cpus, self.resources_mem, self.env_vars),
+                scheduler,
                 framework,
                 self.mesos_url,
                 implicit_acknowledgements)
@@ -47,5 +60,3 @@ class MesosTask(luigi.Task):
         # Ensure that the driver process terminates.
         driver.stop()
         self.on_complete()
-
-

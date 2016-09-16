@@ -1,16 +1,14 @@
 import logging
-
 import mesos.interface
 from mesos.interface import mesos_pb2
 import mesos.native
-import Queue
+from apps.muigi.muigi_context import Conf, MuigiContext
 
 logger = logging.getLogger('luigi-interface')
 
 
-TASK_STATUS_UNKNOWN = 'unknown'
-TASK_STATUS_ASSIGNED = 'assigned'
-TASK_STATUS_RETRY = 'retry'
+TASK_STATUS_PENDING = 'pending'
+TASK_STATUS_STARTED = 'started'
 TASK_STATUS_FINISHED = 'finished'
 TASK_STATUS_FAILED = 'failed'
 
@@ -18,44 +16,103 @@ TASK_STATUS_FAILED = 'failed'
 class MultitaskingScheduler(mesos.interface.Scheduler):
 
     def __init__(self,
-                 docker_image, cmd,
-                 task_cpus, task_mem,
-                 tasks_env_vars,
-                 on_complete,
-                 max_retry = 3):
+                 default_docker_image, default_cmd,
+                 default_task_cpus, default_task_mem,
+                 default_task_max_retry=5):
         """
-        :param docker_image:
-        :param cmd: command entry point
-        :param total_tasks: total tasks to run
-        :param task_cpus: required cpus per task
-        :param task_mem: required mem mb per task
-        :param tasks_env_vars: [{'task_id': 1, 'env_vars': {env_vars}}]
-        :param on_complete ([{task_id: X, status: ''}])
+            start scheduler
         """
-        self.docker_image = str(docker_image)
-        self.cmd = str(cmd)
+        # incoming tasks queue
+        self.tasks_queue = MuigiContext.get_task_queue()
+
+        self.default_docker_image = str(default_docker_image)
+        self.default_cmd = str(default_cmd)
 
         # task resources requirements
-        self.task_cpus = float(task_cpus)
-        self.task_mem = float(task_mem)
+        self.default_task_cpus = float(default_task_cpus)
+        self.default_task_mem = float(default_task_mem)
 
         # retry when task lost
-        self.max_retry_times = max_retry
+        self.default_task_max_retry = default_task_max_retry
 
-        # planned tasks
-        self.tasks_queue = Queue.Queue()
-        for task_i in tasks_env_vars:
-            self.tasks_queue.put(task_i)
+        # active tasks
+        self.task_tracker = MuigiContext.get_task_tracker_dict()
 
-        # active (running) tasks
-        self.active_tasks = {}
+        # should stop scheduler
+        self.stop_scheduler = False
 
-        self.on_complete = on_complete
+    def schedule_task(self, task_id, env_vars):
+        """
+        schedule task
+        :param task_id
+        :param env_vars: {'var1': X, ...}
+        :return:
+        """
+        task = {
+            'task_id': str(task_id),
+            'env_vars': env_vars
+        }
+        logger.debug("Schedule task {}".format(task))
+        self.tasks_queue.put(task)
+
+        self.task_tracker[str(task_id)] = {
+            'slave_id': None,
+            'failed': 0,
+            'task': task,
+            'status': TASK_STATUS_PENDING
+        }
+
+        return task_id
+
+    def is_task_running(self, task_id):
+        """
+        return True if task is running
+        :param task_id:
+        """
+        rec = self.task_tracker.get(str(task_id))
+        if rec:
+            return rec.get('status') in [TASK_STATUS_PENDING, TASK_STATUS_STARTED]
+        else:
+            return False
+
+    def get_task_error(self, task_id):
+        """
+        return None if success or error message
+        :param task_id:
+        """
+        rec = self.task_tracker.get(str(task_id))
+        if rec:
+            if rec.get('status') in [TASK_STATUS_FINISHED]:
+                return None
+            elif rec.get('status') in [TASK_STATUS_FAILED]:
+                err_msg = rec.get('message')
+                return "Task error: {}".format(err_msg)
+        else:
+            return "Task {} not found".format(task_id)
+
+    def stop(self):
+        logger.debug("Request to stop scheduler")
+        self.stop_scheduler = True
 
     def registered(self, driver, frameworkId, masterInfo):
+        """
+        called by mesos when framework is registered
+        """
         logger.debug("Registered with framework ID {}".format(frameworkId.value))
 
     def resourceOffers(self, driver, offers):
+        """
+        incoming offers
+        :param driver:
+        :param offers: list of offers
+        :return:
+        """
+
+        if self.stop_scheduler:
+            logger.debug("Stopping scheduler...")
+            driver.abort()
+            return
+
         for offer in offers:
             mesos_tasks = []
 
@@ -71,9 +128,9 @@ class MultitaskingScheduler(mesos.interface.Scheduler):
 
             remaining_cpus = offered_cpus
             remaining_mem = offered_mem
-            while remaining_cpus >= self.task_cpus and \
-                remaining_mem >= self.task_mem and \
-                self.tasks_queue.empty() is False:
+            while self.tasks_queue.empty() is False and \
+                remaining_cpus >= self.default_task_cpus and \
+                remaining_mem >= self.default_task_mem:
                 # enough resources and queued tasks
 
                 task_i = self.tasks_queue.get()
@@ -82,21 +139,20 @@ class MultitaskingScheduler(mesos.interface.Scheduler):
 
                 # create mesos task
                 logger.debug("Launching task {} with env vars {} using offer {}".format(task_id, task_env_vars, offer.id.value))
-                mesos_task = self._create_mesos_task(offer.slave_id.value, task_id, self.docker_image, self.cmd, self.task_cpus, self.task_mem, task_env_vars)
+                mesos_task = self._create_mesos_task(offer.slave_id.value, task_id, self.default_docker_image, self.default_cmd, self.default_task_cpus, self.default_task_mem, task_env_vars)
                 mesos_tasks.append(mesos_task)
 
                 # track
                 # task.task_id.value is str(tid)
-                self.active_tasks[task_id] = {
-                    'task_id': task_i,
+                self.task_tracker[task_id] = {
                     'slave_id': offer.slave_id,
                     'failed': 0,
-                    'status': TASK_STATUS_ASSIGNED,
-                    'task': task_i
+                    'task': task_i,
+                    'status': TASK_STATUS_STARTED
                 }
 
-                remaining_cpus -= self.task_cpus
-                remaining_mem -= self.task_mem
+                remaining_cpus -= self.default_task_cpus
+                remaining_mem -= self.default_task_mem
 
             # accept mesos offer
             operation = mesos_pb2.Offer.Operation()
@@ -106,42 +162,58 @@ class MultitaskingScheduler(mesos.interface.Scheduler):
             driver.acceptOffers([offer.id], [operation])
 
     def statusUpdate(self, driver, update):
+        """
+        updates
+        :param driver:
+        :param update:
+        :return:
+        """
         task_id = update.task_id.value
-        task_tracking_record = self.active_tasks[task_id]
+        task_tracking_record = self.task_tracker.get(str(task_id))
         slave_id = task_tracking_record.get('slave_id', 'unknown')
 
         mesos_task_status = mesos_pb2.TaskState.Name(update.state)
         logger.debug("Task {} on slave {} is in state {}".format(task_id, slave_id, mesos_task_status))
 
         if update.state == mesos_pb2.TASK_FINISHED:
-            task_tracking_record['status'] = TASK_STATUS_FINISHED
-            pass
+            self.task_tracker[str(task_id)] = {
+                'status': TASK_STATUS_FINISHED
+            }
 
         if update.state == mesos_pb2.TASK_ERROR:
-            # self.tasksFinished += 1
             logger.error("Error message: {}".format(update.message))
-            # self._reschedule_task(task_tracking_record)
-            task_tracking_record['status'] = TASK_STATUS_FAILED
+            self.task_tracker[str(task_id)] = {
+                'status': TASK_STATUS_FAILED,
+                'message': update.message
+            }
 
         if update.state == mesos_pb2.TASK_LOST or \
             update.state == mesos_pb2.TASK_KILLED or \
             update.state == mesos_pb2.TASK_FAILED:
             # failed or lost task
             if self._reschedule_task(task_tracking_record):
-                task_tracking_record['status'] = TASK_STATUS_RETRY
+                self.task_tracker[str(task_id)] = {
+                    'status': TASK_STATUS_PENDING
+                }
             else:
-                logger.error("Aborting because task {} is in unexpected state {} with message '{}'".format(task_id, mesos_task_status, update.message))
-                self._on_complete()
-                driver.abort()
-
-        if self.tasks_queue.empty() is True \
-            and self._has_active_tasks() is False:
-            # stop driver if all tasks finished
-            logger.debug("All tasks finished, stopping driver...")
-            self._on_complete()
-            driver.abort()
+                logger.error("Aborting task {} is in unexpected state {} with message '{}'".format(task_id, mesos_task_status, update.message))
+                self.task_tracker[str(task_id)] = {
+                    'status': TASK_STATUS_FAILED,
+                    'message': update.message
+                }
 
     def _create_mesos_task(self, slave_id, tid, docker_image, cmd, task_cpus, task_mem, env_vars):
+        """
+        create mesos task
+        :param slave_id:
+        :param tid:
+        :param docker_image:
+        :param cmd:
+        :param task_cpus:
+        :param task_mem:
+        :param env_vars:
+        :return:
+        """
         task = mesos_pb2.TaskInfo()
         task.task_id.value = str(tid)
         task.slave_id.value = slave_id
@@ -184,21 +256,13 @@ class MultitaskingScheduler(mesos.interface.Scheduler):
             task_id = task_tracking_record.get('task_id')
             failed = task_tracking_record.get('failed', 0)
             failed += 1
-            if failed < self.max_retry_times:
+            if failed < self.default_task_max_retry:
                 logger.error("Task {} will be restarted {} times".format(task_id, failed))
                 task_tracking_record['failed'] = failed
                 task_i = task_tracking_record['task']
+                # put task back to queue
                 self.tasks_queue.put(task_i)
                 return True
             else:
                 logger.error("Max retry reached for task {}".format(task_id))
                 return False
-
-    def _has_active_tasks(self):
-        l = [x for x in self.active_tasks.values() if x.get('status', TASK_STATUS_UNKNOWN) in [TASK_STATUS_ASSIGNED, TASK_STATUS_RETRY]].__len__()
-        return l > 0
-
-    def _on_complete(self):
-        if self.on_complete and callable(self.on_complete):
-            r = [{'task_id': t.get('task_id', 'unknown'), 'status': t.get('status', TASK_STATUS_UNKNOWN)} for t in self.active_tasks.values()]
-            self.on_complete(r)

@@ -1,6 +1,6 @@
 import logging
 import luigi
-from apps.muigi.multitasking_scheduler import MuigiContext, Conf
+from apps.muigi.multitasking_scheduler import Conf, MuigiContext, MultitaskingScheduler
 from apps.muigi.mesos_base_task import MesosBaseTask
 
 logger = logging.getLogger('luigi-interface')

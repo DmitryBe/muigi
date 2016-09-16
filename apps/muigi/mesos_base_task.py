@@ -1,7 +1,6 @@
 import logging
 from time import sleep
 import luigi
-
 from apps.muigi.multitasking_scheduler import MuigiContext, Conf
 
 logger = logging.getLogger('luigi-interface')
